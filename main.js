@@ -17,7 +17,7 @@ const watermarkPath = path.join(IMG_ROUTE, 'wm.png');
 const bot = new TelegramBot(TOKEN);
 bot.setWebHook(`${DOMAIN}/bot${TOKEN}`);
 
-const browser = await puppeteer.launch();
+const browser = await puppeteer.launch({headless: false});
 const page = await browser.newPage();
 await page.goto('https://kwai-kolors-kolors-virtual-try-on.hf.space/', { waitUntil: 'networkidle2' });
 
@@ -49,36 +49,12 @@ bot.on('message', async ({ message_id, text, photo, from: { id, username, first_
     console.log("\n" + new Date().toLocaleString());
     console.log(`Procesando mensaje de: ${username ? `https://t.me/${username}` : `tg://user?id=${id}`}`);
 
-    if (photo) {
-
-        const photoId = photo[photo.length - 1].file_id;
-        const uPhoto = await bot.getFile(photoId);
-        const url = `https://api.telegram.org/file/bot${TOKEN}/${uPhoto.file_path}`;
-        const imgName = `${username || id}_${message_id}`;
-        const imgPath = path.join(IMG_ROUTE, "users", `${imgName}.jpg`);
-
-        const writer = fs.createWriteStream(imgPath);
-
-        const response = await axios({ url, method: 'GET', responseType: 'stream' });
-        response.data.pipe(writer);
-
-        await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-        });
-    }
-
     const currentTime = Date.now();
     const recentError = (currentTime - lastErrorTime) < WAIT_TIME;
 
-    console.log("\n\n" + new Date().toLocaleString());
-    console.log(`Procesando mensaje de: ${msg.from.username ? `https://t.me/${msg.from.username}` : `tg://user?id=${msg.from.id}`}`);
-
-    if (/^\/start/.test(text)) {
-        bot.sendMessage(id, `¡Hola, ${first_name}! Envíame una foto y te mostraré cómo te verías con un tradicional huipil.`);
-
-        return;
-    } else if (photo) {
+    if (/^\/start/.test(text)) bot.sendMessage(id, `¡Hola, ${first_name}! Envíame una foto y te mostraré cómo te verías con un tradicional huipil.`);
+    
+    else if (photo) {
         console.log("Foto recibida");
         if (recentError) {
             await bot.sendMessage(id, "Actualmente estamos procesando una alta cantidad de solicitudes. Intenta nuevamente en unos minutos. ¡Gracias por tu paciencia!");
@@ -96,18 +72,17 @@ bot.on('message', async ({ message_id, text, photo, from: { id, username, first_
 
         isProcessing = true;
 
-        const photoId = msg.photo[msg.photo.length - 1].file_id;
-
         try {
-            const photo = await bot.getFile(photoId);
-            const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${photo.file_path}`;
-            const imgName = `${msg.from.username || msg.from.id}_${msg.message_id}`;
+            const photoId = photo[photo.length - 1].file_id;
+            const uPhoto = await bot.getFile(photoId);
+            const url = `https://api.telegram.org/file/bot${TOKEN}/${uPhoto.file_path}`;
+            const imgName = `${username || id}_${message_id}`;
             const imgPath = path.join(IMG_ROUTE, "users", `${imgName}.jpg`);
-
+            console.log("Descargando imagen...:", url);
             const writer = fs.createWriteStream(imgPath);
 
             const response = await axios({
-                url: fileUrl,
+                url,
                 method: 'GET',
                 responseType: 'stream'
             });
@@ -120,38 +95,38 @@ bot.on('message', async ({ message_id, text, photo, from: { id, username, first_
 
             const i = Math.ceil(Math.random() * 10);
 
-            const person = await axios.get(`${DOMAIN}/public/users/${imgName}.jpg`, { responseType: 'arraybuffer' });
-            const garment = await axios.get(`${DOMAIN}/public/clothes/${i}.png`, { responseType: 'arraybuffer' });
-            const person_img = await person.data;
-            const garment_img = await garment.data;
-            const payload = { person_img, garment_img };
+            const garmentBuffer = await fs.promises.readFile(`${DOMAIN}/public/clothes/${i}.png`);
 
-            const client = await Client.connect("Kwai-Kolors/Kolors-Virtual-Try-On");
-            const result = await client.predict("/tryon", payload);
+            const personImageInput = await page.$('#component-11 input[type="file"]');
+            const garmentImageInput = await page.$('#component-14 input[type="file"]');
 
-            const imgResponse = await axios({
-                url: result.data[0].url,
-                method: 'GET',
-                responseType: 'arraybuffer',
-            });
+            await personImageInput.uploadFile(imgPath);
+            await garmentImageInput.uploadFile(garmentImagePath);
 
-            const watermarkBuffer = await fs.promises.readFile(watermarkPath);
+            const runButton = await page.$('#button');
+            await runButton.click();
 
-            const image = sharp(imgResponse.data);
-            const watermark = sharp(watermarkBuffer);
+            await page.waitForTimeout(60000);
 
-            const { width } = await image.metadata();
+            console.log("Screenshotting...");
 
-            const input = await watermark.resize({ width }).toBuffer();
+            // const watermarkBuffer = await fs.promises.readFile(watermarkPath);
 
-            const finalImage = await image.composite([{ input, gravity: 'south' }]).toFormat('jpg').toBuffer();
+            // const image = sharp(imgResponse.data);
+            // const watermark = sharp(watermarkBuffer);
 
-            await bot.sendPhoto(id, finalImage, {
-                caption: "Aquí tenés tu foto.\n\n¡Feliz día del Huipil!"
-            });
+            // const { width } = await image.metadata();
 
-            const transformedImgPath = path.join(IMG_ROUTE, "transformed", `${imgName}.jpg`);
-            await fs.promises.writeFile(transformedImgPath, finalImage);
+            // const input = await watermark.resize({ width }).toBuffer();
+
+            // const finalImage = await image.composite([{ input, gravity: 'south' }]).toFormat('jpg').toBuffer();
+
+            // await bot.sendPhoto(id, finalImage, {
+            //     caption: "Aquí tenés tu foto.\n\n¡Feliz día del Huipil!"
+            // });
+
+            // const transformedImgPath = path.join(IMG_ROUTE, "transformed", `${imgName}.jpg`);
+            // await fs.promises.writeFile(transformedImgPath, finalImage);
         } catch (error) {
             lastErrorTime = currentTime;
 
