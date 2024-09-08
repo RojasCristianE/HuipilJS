@@ -1,25 +1,34 @@
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from 'url';
+import { fileURLToPath } from "url";
 import express from "express";
-import axios from 'axios';
+import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
-import puppeteer from 'puppeteer';
-import sharp from 'sharp';
+import puppeteer from "puppeteer";
+import sharp from "sharp";
 
 const { TOKEN, DOMAIN, PORT } = process.env;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const IMG_ROUTE = path.join(__dirname, 'public');
-const watermarkPath = path.join(IMG_ROUTE, 'wm.png');
+const IMG_ROUTE = path.join(__dirname, "public");
+const watermarkPath = path.join(IMG_ROUTE, "wm.png");
+const watermarkBuffer = await fs.promises.readFile(watermarkPath);
 
 const bot = new TelegramBot(TOKEN);
 bot.setWebHook(`${DOMAIN}/bot${TOKEN}`);
 
-const browser = await puppeteer.launch({headless: false});
-const page = await browser.newPage();
-await page.goto('https://kwai-kolors-kolors-virtual-try-on.hf.space/', { waitUntil: 'networkidle2' });
+const browser = await puppeteer.launch({
+    headless: false,
+    userDataDir: path.join(__dirname, "chrome_cache"),
+    devtools: true,
+});
+const [page] = await browser.pages();
+await page.setViewport({ width: 1366, height: 800 });
+await page.goto("https://kwai-kolors-kolors-virtual-try-on.hf.space/", {
+    waitUntil: "networkidle2",
+    timeout: 0,
+});
 
 const app = express();
 
@@ -34,109 +43,210 @@ app.post(`/bot${TOKEN}`, (req, res) => {
     res.sendStatus(200);
 });
 
-app.get('/public/:subfolder/:filename', ({ params: { subfolder, filename } }, res) => {
-    const filePath = path.join(IMG_ROUTE, subfolder, filename);
+app.get(
+    "/public/:subfolder/:filename",
+    ({ params: { subfolder, filename } }, res) => {
+        const filePath = path.join(IMG_ROUTE, subfolder, filename);
 
-    fs.access(filePath, fs.constants.F_OK, err => {
-        if (err) res.status(404).json({ error: 'File not found' });
-        else res.sendFile(filePath);
-    });
-});
+        fs.access(filePath, fs.constants.F_OK, (err) => {
+            if (err) res.status(404).json({ error: "File not found" });
+            else res.sendFile(filePath);
+        });
+    }
+);
 
 app.listen(PORT, () => console.log(`Express server is listening on ${PORT}`));
 
-bot.on('message', async ({ message_id, text, photo, from: { id, username, first_name } }) => {
-    console.log("\n" + new Date().toLocaleString());
-    console.log(`Procesando mensaje de: ${username ? `https://t.me/${username}` : `tg://user?id=${id}`}`);
+bot.on(
+    "message",
+    async ({ message_id, text, photo, from: { id, username, first_name } }) => {
+        console.log("\n" + new Date().toLocaleString());
+        console.log(`Procesando mensaje de: tg://user?id=${id}`);
 
-    const currentTime = Date.now();
-    const recentError = (currentTime - lastErrorTime) < WAIT_TIME;
+        const currentTime = Date.now();
+        const recentError = currentTime - lastErrorTime < WAIT_TIME;
 
-    if (/^\/start/.test(text)) bot.sendMessage(id, `¡Hola, ${first_name}! Envíame una foto y te mostraré cómo te verías con un tradicional huipil.`);
-    
-    else if (photo) {
-        console.log("Foto recibida");
         if (recentError) {
-            await bot.sendMessage(id, "Actualmente estamos procesando una alta cantidad de solicitudes. Intenta nuevamente en unos minutos. ¡Gracias por tu paciencia!");
+            await bot.sendMessage(
+                id,
+                "Actualmente estamos procesando una alta cantidad de solicitudes. Intenta nuevamente en unos minutos. ¡Gracias por tu paciencia!"
+            );
 
             return;
         }
 
         if (isProcessing) {
-            await bot.sendMessage(id, "Estoy procesando otra solicitud en este momento. Intenta de nuevo en unos minutos.");
+            await bot.sendMessage(
+                id,
+                "Estoy procesando otra solicitud en este momento. Intenta de nuevo en unos minutos."
+            );
 
             return;
         }
 
-        await bot.sendMessage(id, "¡Linda foto!\n\nAhora solo espera unos minutos para recibir tu foto");
+        if (/^\/start/.test(text))
+            bot.sendMessage(
+                id,
+                `¡Hola, ${first_name}! Envíame una foto y te mostraré cómo te verías con un tradicional huipil.`
+            );
+        else if (photo) {
+            console.log("Foto recibida");
 
-        isProcessing = true;
+            await bot.sendMessage(
+                id,
+                "¡Linda foto!\n\nAhora solo espera unos minutos para recibir tu foto"
+            );
+            isProcessing = true;
 
-        try {
-            const photoId = photo[photo.length - 1].file_id;
-            const uPhoto = await bot.getFile(photoId);
-            const url = `https://api.telegram.org/file/bot${TOKEN}/${uPhoto.file_path}`;
-            const imgName = `${username || id}_${message_id}`;
-            const imgPath = path.join(IMG_ROUTE, "users", `${imgName}.jpg`);
-            console.log("Descargando imagen...:", url);
-            const writer = fs.createWriteStream(imgPath);
+            let url;
 
-            const response = await axios({
-                url,
-                method: 'GET',
-                responseType: 'stream'
-            });
-            response.data.pipe(writer);
+            try {
+                const photoId = photo[photo.length - 1].file_id;
+                const uPhoto = await bot.getFile(photoId);
+                const imgName = `${username || id}_${message_id}`;
+                const usrImgPath = path.join(
+                    IMG_ROUTE,
+                    "users",
+                    `${imgName}.jpg`
+                );
+                const writer = fs.createWriteStream(usrImgPath);
 
-            await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-            });
+                url = `https://api.telegram.org/file/bot${TOKEN}/${uPhoto.file_path}`;
+                const usrImgResponse = await axios({
+                    url,
+                    method: "GET",
+                    responseType: "stream",
+                });
+                usrImgResponse.data.pipe(writer);
 
-            const i = Math.ceil(Math.random() * 10);
+                await new Promise((resolve, reject) => {
+                    writer.on("finish", resolve);
+                    writer.on("error", reject);
+                });
 
-            const garmentBuffer = await fs.promises.readFile(`${DOMAIN}/public/clothes/${i}.png`);
+                const i = Math.ceil(Math.random() * 10);
 
-            const personImageInput = await page.$('#component-11 input[type="file"]');
-            const garmentImageInput = await page.$('#component-14 input[type="file"]');
+                const garmentImagePath = path.join(
+                    IMG_ROUTE,
+                    "clothes",
+                    `${i}.png`
+                );
 
-            await personImageInput.uploadFile(imgPath);
-            await garmentImageInput.uploadFile(garmentImagePath);
+                await page.waitForSelector('#component-11 input[type="file"]');
+                const personImageInput = await page.$(
+                    '#component-11 input[type="file"]'
+                );
+                await personImageInput.uploadFile(usrImgPath);
 
-            const runButton = await page.$('#button');
-            await runButton.click();
+                await page.waitForSelector('#component-14 input[type="file"]');
+                const garmentImageInput = await page.$(
+                    '#component-14 input[type="file"]'
+                );
+                await garmentImageInput.uploadFile(garmentImagePath);
 
-            await page.waitForTimeout(60000);
+                let imgUploadCompleted = false;
+                let garmentUploadCompleted = false;
+                let notRunYet = true;
 
-            console.log("Screenshotting...");
+                const responseListener = async (response) => {
+                    const url = response.url();
 
-            // const watermarkBuffer = await fs.promises.readFile(watermarkPath);
+                    if (url.includes("image.webp")) {
+                        console.log("Imagen generada detectada: " + url);
+                        page.off("response", responseListener);
+                        console.log("Listener de respuestas desactivado.");
 
-            // const image = sharp(imgResponse.data);
-            // const watermark = sharp(watermarkBuffer);
+                        const imageResponse = await axios({
+                            url,
+                            method: "GET",
+                            responseType: "arraybuffer",
+                        });
 
-            // const { width } = await image.metadata();
+                        const imageBuffer = Buffer.from(imageResponse.data);
+                        const image = sharp(imageBuffer);
+                        const watermark = sharp(watermarkBuffer);
 
-            // const input = await watermark.resize({ width }).toBuffer();
+                        const { width } = await image.metadata();
 
-            // const finalImage = await image.composite([{ input, gravity: 'south' }]).toFormat('jpg').toBuffer();
+                        const input = await watermark
+                            .resize({ width })
+                            .toBuffer();
 
-            // await bot.sendPhoto(id, finalImage, {
-            //     caption: "Aquí tenés tu foto.\n\n¡Feliz día del Huipil!"
-            // });
+                        const finalImage = await image
+                            .composite([{ input, gravity: "south" }])
+                            .toFormat("jpg")
+                            .toBuffer();
 
-            // const transformedImgPath = path.join(IMG_ROUTE, "transformed", `${imgName}.jpg`);
-            // await fs.promises.writeFile(transformedImgPath, finalImage);
-        } catch (error) {
-            lastErrorTime = currentTime;
+                        await bot.sendPhoto(id, finalImage, {
+                            caption:
+                                "Aquí tenés tu foto.\n\n¡Feliz día del Huipil!",
+                        });
 
-            console.error("Error en la solicitud:", error);
+                        const transformedImgPath = path.join(
+                            IMG_ROUTE,
+                            "transformed",
+                            `${imgName}.jpg`
+                        );
+                        await fs.promises.writeFile(
+                            transformedImgPath,
+                            finalImage
+                        );
 
-            await bot.sendMessage(id, "Actualmente estamos procesando una alta cantidad de solicitudes. Intenta nuevamente en unos minutos. ¡Gracias por tu paciencia!");
-        } finally {
-            isProcessing = false;
-        }
-    } else {
-        bot.sendMessage(id, "¡Lo siento! Solo puedo procesar comandos o fotos.");
+                        await page.reload();
+
+						imgUploadCompleted = false;
+						garmentUploadCompleted = false;
+
+                        isProcessing = false;
+                    }
+
+					if (!imgUploadCompleted) {
+						console.log(
+                            `Comprobando si la petición ${url} es sobre la imagen generada...`
+                        );
+                        console.log("Estado actual", imgUploadCompleted);
+                        imgUploadCompleted =
+                            imgUploadCompleted ||
+                            url.includes(`${imgName}.jpg`);
+                        console.log("Nuevo estado",imgUploadCompleted);
+					}
+
+                    if (!garmentUploadCompleted) {
+						console.log(
+							`Comprobando si la petición ${url} es sobre la imagen de la vestimenta...`
+						);
+						console.log("Estado actual", garmentUploadCompleted);
+						garmentUploadCompleted =
+							garmentUploadCompleted || url.includes(`${i}.png`);
+						console.log("Nuevo estado", garmentUploadCompleted);
+					}
+
+                    const bothImgUploaded =
+                        imgUploadCompleted && garmentUploadCompleted;
+
+                    if (bothImgUploaded && notRunYet) {
+                        notRunYet = false;
+                        console.log("Ambas imágenes han terminado de cargar.");
+
+                        await page.waitForSelector("#button");
+                        const runButton = await page.$("#button");
+                        await runButton.click();
+                    }
+                };
+
+                page.on("response", responseListener);
+            } catch (error) {
+                lastErrorTime = currentTime;
+
+                await bot.sendMessage(
+                    id,
+                    "Actualmente estamos procesando una alta cantidad de solicitudes. Intenta nuevamente en unos minutos. ¡Gracias por tu paciencia!"
+                );
+            }
+        } else
+            bot.sendMessage(
+                id,
+                "¡Lo siento! Solo puedo procesar comandos o fotos."
+            );
     }
-});
+);
