@@ -132,5 +132,5 @@ dist
 
 app.js
 
-/public/transformed/*
-/public/users/*
+public/transformed/*
+public/users/*
