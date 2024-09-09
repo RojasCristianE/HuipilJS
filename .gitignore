@@ -41,7 +41,6 @@ build/Release
 # Dependency directories
 node_modules/
 jspm_packages/
-chrome_cache/
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
@@ -134,3 +133,4 @@ app.js
 
 public/transformed/*
 public/users/*
+chrome_cache/
